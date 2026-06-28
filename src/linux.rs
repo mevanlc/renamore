@@ -1,36 +1,46 @@
-use std::path::Path;
+use std::ffi::CString;
 use std::io::{Error, ErrorKind, Result};
-use std::ffi::{c_char, c_int, c_uint, CString};
 use std::os::unix::prelude::OsStrExt;
+use std::path::Path;
 
-// Linking will fail with glibc versions prior to 2.28.
-
-extern "C" {
-    fn renameat2(
-        olddirfd: c_int,
-        oldpath: *const c_char,
-        newdirfd: c_int,
-        newpath: *const c_char,
-        flags: c_uint,
-    ) -> c_int;
+unsafe fn renameat2(
+    olddirfd: libc::c_int,
+    oldpath: *const libc::c_char,
+    newdirfd: libc::c_int,
+    newpath: *const libc::c_char,
+    flags: libc::c_uint,
+) -> libc::c_int {
+    unsafe {
+        libc::syscall(
+            libc::SYS_renameat2 as libc::c_long,
+            olddirfd,
+            oldpath,
+            newdirfd,
+            newpath,
+            flags,
+        ) as libc::c_int
+    }
 }
-
-const AT_FDCWD: c_int = -100;
-const RENAME_NOREPLACE: c_uint = 1;
-// const RENAME_EXCHANGE: c_uint = 2;
 
 pub fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
     let from_str = CString::new(from.as_os_str().as_bytes())?;
     let to_str = CString::new(to.as_os_str().as_bytes())?;
     let ret = unsafe {
-        renameat2(AT_FDCWD, from_str.as_ptr(), AT_FDCWD, to_str.as_ptr(), RENAME_NOREPLACE)
+        renameat2(
+            libc::AT_FDCWD,
+            from_str.as_ptr(),
+            libc::AT_FDCWD,
+            to_str.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
     };
 
     if ret == -1 {
         let error = Error::last_os_error();
         // EINVAL is returned if `flags` is invalid or the file system doesn't
-        // support the operation.
-        if error.kind() == ErrorKind::InvalidInput {
+        // support the operation. ENOSYS is returned if the running kernel
+        // doesn't implement renameat2.
+        if matches!(error.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)) {
             Err(Error::from(ErrorKind::Unsupported))
         } else {
             Err(error)
@@ -53,87 +63,87 @@ fn get_kernel_version() -> Result<Version> {
     let version = std::fs::read_to_string("/proc/version")?;
     let version_bytes = version.as_bytes();
 
-    let major_begin = version_bytes.iter()
+    let major_begin = version_bytes
+        .iter()
         .position(|c| c.is_ascii_digit())
         .ok_or(ErrorKind::InvalidData)?;
-    let major_end = major_begin + version_bytes[major_begin..].iter()
-        .position(|c| *c == b'.')
-        .ok_or(ErrorKind::InvalidData)?;
+    let major_end = major_begin
+        + version_bytes[major_begin..]
+            .iter()
+            .position(|c| *c == b'.')
+            .ok_or(ErrorKind::InvalidData)?;
 
     if major_end == version_bytes.len() - 1 {
         return Err(ErrorKind::InvalidData.into());
     }
 
     let minor_begin = major_end + 1;
-    let minor_end = minor_begin + version_bytes[minor_begin..].iter()
-        .position(|c| *c == b'.')
-        .ok_or(ErrorKind::InvalidData)?;
+    let minor_end = minor_begin
+        + version_bytes[minor_begin..]
+            .iter()
+            .position(|c| *c == b'.')
+            .ok_or(ErrorKind::InvalidData)?;
 
     if minor_end == version_bytes.len() - 1 {
         return Err(ErrorKind::InvalidData.into());
     }
 
     let patch_begin = minor_end + 1;
-    let patch_end = patch_begin + version_bytes[patch_begin..].iter()
-        .position(|c| !c.is_ascii_digit())
-        .ok_or(ErrorKind::InvalidData)?;
+    let patch_end = patch_begin
+        + version_bytes[patch_begin..]
+            .iter()
+            .position(|c| !c.is_ascii_digit())
+            .ok_or(ErrorKind::InvalidData)?;
 
-    let major = version[major_begin..major_end].parse()
+    let major = version[major_begin..major_end]
+        .parse()
         .map_err(|_| ErrorKind::InvalidData)?;
-    let minor = version[minor_begin..minor_end].parse()
+    let minor = version[minor_begin..minor_end]
+        .parse()
         .map_err(|_| ErrorKind::InvalidData)?;
-    let patch = version[patch_begin..patch_end].parse()
+    let patch = version[patch_begin..patch_end]
+        .parse()
         .map_err(|_| ErrorKind::InvalidData)?;
 
     Ok(Version::new(major, minor, patch))
 }
 
-#[repr(C)]
-struct statfs {
-    f_type: c_uint,
-    // We don't care about the rest.
-    padding: [u64; 16],
-}
-
-extern "C" {
-    fn statfs(path: *const c_char, buf: *mut statfs) -> c_int;
-}
-
-fn get_filesystem_type(path: &Path) -> Result<u32> {
+fn get_filesystem_type(path: &Path) -> Result<u64> {
     let path_str = CString::new(path.as_os_str().as_bytes())?;
-    let mut buf = std::mem::MaybeUninit::<statfs>::uninit();
-    let ret = unsafe { statfs(path_str.as_ptr(), buf.as_mut_ptr()) };
+    let mut buf = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    let ret = unsafe { libc::statfs(path_str.as_ptr(), buf.as_mut_ptr()) };
 
     if ret == -1 {
         return Err(Error::last_os_error());
     }
 
-    Ok(unsafe { buf.assume_init() }.f_type)
+    Ok(unsafe { buf.assume_init() }.f_type as u64)
 }
 
-const FS_EXT4: c_uint = 0xef53; // EXT4_SUPER_MAGIC
-const FS_BTRFS: [c_uint; 2] = [
-    0x9123683e, // BTRFS_SUPER_MAGIC
+const FS_EXT4: u64 = libc::EXT4_SUPER_MAGIC as u64;
+const FS_BTRFS: [u64; 2] = [
+    libc::BTRFS_SUPER_MAGIC as u64,
     0x73727279, // BTRFS_TEST_MAGIC
 ];
-const FS_TMPFS: c_uint = 0x01021994; // TMPFS_MAGIC
-const FS_CIFS: c_uint = 0xff534d42; // CIFS_MAGIC_NUMBER
-const FS_XFS: c_uint = 0x58465342; // XFS_SUPER_MAGIC
+const FS_TMPFS: u64 = libc::TMPFS_MAGIC as u64;
+const FS_CIFS: u64 = 0xff534d42; // CIFS_MAGIC_NUMBER
+const FS_XFS: u64 = 0x58465342; // XFS_SUPER_MAGIC
+
 // EXT2_SUPER_MAGIC is the same as EXT4_SUPER_MAGIC.
-const FS_EXT2: c_uint = 0xef51; // EXT2_OLD_SUPER_MAGIC
-const FS_MINIX: [c_uint; 5] = [
-    0x137f, // MINIX_SUPER_MAGIC
-    0x138f, // MINIX_SUPER_MAGIC2
-    0x2468, // MINIX2_SUPER_MAGIC
-    0x2478, // MINIX2_SUPER_MAGIC2
-    0x4d5a, // MINIX3_SUPER_MAGIC
+const FS_EXT2: u64 = 0xef51; // EXT2_OLD_SUPER_MAGIC
+const FS_MINIX: [u64; 5] = [
+    libc::MINIX_SUPER_MAGIC as u64,
+    libc::MINIX_SUPER_MAGIC2 as u64,
+    libc::MINIX2_SUPER_MAGIC as u64,
+    libc::MINIX2_SUPER_MAGIC2 as u64,
+    libc::MINIX3_SUPER_MAGIC as u64,
 ];
-const FS_REISERFS: c_uint = 0x52654973; // REISERFS_SUPER_MAGIC
-const FS_JFS: c_uint = 0x3153464a; // JFS_SUPER_MAGIC
-// vfat was discovered experimentally. It doesn't appear in the man page or the
-// magic.h header.
-const FS_VFAT: c_uint = 0x7c7c6673;
-const FS_BPF: c_uint = 0xcafe4a11; // BPF_FS_MAGIC
+const FS_REISERFS: u64 = libc::REISERFS_SUPER_MAGIC as u64;
+const FS_JFS: u64 = 0x3153464a; // JFS_SUPER_MAGIC
+                                // vfat was discovered experimentally. It doesn't appear in the man page or the
+                                // magic.h header.
+const FS_VFAT: u64 = 0x7c7c6673;
+const FS_BPF: u64 = libc::BPF_FS_MAGIC as u64;
 
 pub fn rename_exclusive_is_atomic(path: &Path) -> Result<bool> {
     let kernel = get_kernel_version()?;

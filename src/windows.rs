@@ -1,7 +1,7 @@
-use std::path::Path;
-use std::io::Result;
 use std::ffi::{c_int, c_ulong, OsStr};
+use std::io::Result;
 use std::os::windows::prelude::OsStrExt;
+use std::path::Path;
 
 // Linking will fail on Windows versions prior to XP.
 
@@ -23,9 +23,7 @@ fn to_wide(s: &OsStr) -> Vec<u16> {
 pub fn rename_exclusive(from: &Path, to: &Path) -> Result<()> {
     let from_str = to_wide(from.as_os_str());
     let to_str = to_wide(to.as_os_str());
-    let ret = unsafe {
-        MoveFileExW(from_str.as_ptr(), to_str.as_ptr(), 0)
-    };
+    let ret = unsafe { MoveFileExW(from_str.as_ptr(), to_str.as_ptr(), 0) };
 
     if ret == 0 {
         Err(std::io::Error::last_os_error())

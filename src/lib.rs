@@ -49,20 +49,14 @@
 //!
 //! ## Platform-specific behaviour
 //!
-//! On Linux, the `renameat2` syscall is used. A wrapper around this syscall is
-//! provided by glibc since version 2.28 but not musl (yet?). The existence of
-//! the wrapper is checked at build time and a wrapper is provided if one isn't
-//! found. In case something goes wrong, there are two features that can be used
-//! to bypass this mechanism.
+//! On Linux, the `renameat2` syscall is used through `libc`. The
+//! `always-fallback` feature can force Linux to report [`ErrorKind::Unsupported`]
+//! so [`rename_exclusive_fallback`] uses its non-atomic fallback.
 //!
-//!  - `always-supported`. Assume that `renameat2` exists.
-//!  - `always-fallback`. Assume that `renameat2` doesn't exist.
-//!
-//! Hopefully using these features shouldn't be necessary. If they do become
-//! necessary, then there might be a bug.
+//!  - `always-fallback`. Assume that `renameat2` doesn't exist on Linux.
 
-use std::path::Path;
 use std::io::{Error, ErrorKind, Result};
+use std::path::Path;
 
 /// Rename a file without overwriting the destination path if it exists.
 ///
@@ -97,11 +91,10 @@ pub fn rename_exclusive<F: AsRef<Path>, T: AsRef<Path>>(from: F, to: T) -> Resul
 
 /// Determine whether an atomic [`rename_exclusive`] is supported.
 ///
-/// Support for performing this operation atomically depends on whether the
-/// necessary functions are available at link-time, and the OS implements the
-/// operation for the file system of the given path. If this function returns
-/// `Ok(true)`, then a call to `rename_exclusive` at the same path is unlikely
-/// to return [`ErrorKind::Unsupported`] if it fails.
+/// Support for performing this operation atomically depends on whether the OS
+/// implements the operation for the file system of the given path. If this
+/// function returns `Ok(true)`, then a call to `rename_exclusive` at the same
+/// path is unlikely to return [`ErrorKind::Unsupported`] if it fails.
 ///
 /// [`ErrorKind::Unsupported`]: std::io::ErrorKind::Unsupported
 ///
@@ -176,9 +169,9 @@ fn rename_exclusive_non_atomic(from: &Path, to: &Path) -> Result<()> {
     std::fs::rename(from, to)
 }
 
-#[cfg(all(target_os = "linux", linker))]
+#[cfg(all(target_os = "linux", not(feature = "always-fallback")))]
 mod linux;
-#[cfg(all(target_os = "linux", linker))]
+#[cfg(all(target_os = "linux", not(feature = "always-fallback")))]
 use linux as sys;
 
 #[cfg(target_vendor = "apple")]
@@ -192,13 +185,13 @@ mod windows;
 use windows as sys;
 
 #[cfg(not(any(
-    all(target_os = "linux", linker),
+    all(target_os = "linux", not(feature = "always-fallback")),
     target_vendor = "apple",
     target_os = "windows",
 )))]
 mod sys {
-    use std::path::Path;
     use std::io::{Error, ErrorKind, Result};
+    use std::path::Path;
 
     pub fn rename_exclusive(_from: &Path, _to: &Path) -> Result<()> {
         Err(Error::from(ErrorKind::Unsupported))

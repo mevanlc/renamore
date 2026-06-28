@@ -1,5 +1,5 @@
-use std::path::{Component, Path, PathBuf};
 use std::io::{ErrorKind, Result};
+use std::path::{Component, Path, PathBuf};
 
 struct CurrentDirectory {
     previous: PathBuf,
@@ -99,7 +99,9 @@ fn rename_exclusive_rel() -> Result<()> {
     let path_up_b = parent_join(&path_b);
 
     // Rename a file to an existing file in the parent directory.
-    assert!(is_exists_error(super::rename_exclusive(&path_b, &path_up_b)));
+    assert!(is_exists_error(super::rename_exclusive(
+        &path_b, &path_up_b
+    )));
     assert!(path_b.try_exists()?);
 
     // Rename a file in a parent directory to a non-existent path.
