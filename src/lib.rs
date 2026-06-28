@@ -102,8 +102,8 @@ pub fn rename_exclusive<F: AsRef<Path>, T: AsRef<Path>>(from: F, to: T) -> Resul
 ///
 /// On Linux, this parses `/proc/version` to determine the kernel version and
 /// calls `statfs` to determine the file system type. On Darwin (macOS, iOS,
-/// watchOS, tvOS), this calls `getattrlist` to determine whether the volume at
-/// the path lists `VOL_CAP_INT_RENAME_EXCL` as one of its capabilities. On
+/// watchOS, tvOS), this calls `getattrlist` to determine whether the containing
+/// volume lists `VOL_CAP_INT_RENAME_EXCL` as one of its capabilities. On
 /// Windows, this always returns `Ok(true)` even though that may not be
 /// technically true. On all other platforms, this always returns `Ok(false)`.
 ///
